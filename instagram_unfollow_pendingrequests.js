@@ -233,10 +233,36 @@
         try {
             const parser = new DOMParser();
             const doc = parser.parseFromString(htmlContent, 'text/html');
-            
+
+            // ── Strategy 1: New 2024/2025 format ──────────────────────────────
+            // Each entry is a card with a <table>. Rows are <tr> elements with
+            // two <td> cells: the label (e.g. "Kullanıcı adı") and the value.
+            // We find every <td> whose text is the username label, then read
+            // the next sibling <td> in the same row for the actual username.
+            const usernamesNew = [];
+            const labelCells = Array.from(doc.querySelectorAll('td'));
+            for (const td of labelCells) {
+                const text = td.textContent.trim();
+                if (text === 'Kullanıcı adı' || text.toLowerCase() === 'username') {
+                    const valueTd = td.nextElementSibling;
+                    if (valueTd) {
+                        const val = valueTd.textContent.trim();
+                        if (/^[a-zA-Z0-9._]{1,30}$/.test(val)) {
+                            usernamesNew.push({ username: val, timestamp: null });
+                        }
+                    }
+                }
+            }
+
+            if (usernamesNew.length > 0) {
+                log(`Parsed ${usernamesNew.length} username(s) using new Instagram HTML format`, 'info');
+                filterAndSetRequests(usernamesNew);
+                return;
+            }
+
+            // ── Strategy 2: Embedded JSON (old format) ────────────────────────
             const scripts = doc.querySelectorAll('script');
             let jsonData = null;
-            
             for (let script of scripts) {
                 const scriptContent = script.textContent.trim();
                 if (scriptContent.includes('window._sharedData') || scriptContent.includes('window.__additionalDataLoaded')) {
@@ -247,49 +273,40 @@
                     }
                 }
             }
-            
-            if (!jsonData) {
-                const usernames = [];
-                
-                const links = doc.querySelectorAll('a[href*="instagram.com/"]');
-                links.forEach(link => {
-                    const href = link.getAttribute('href');
-                    const match = href.match(/instagram\.com\/([^\/\?]+)/);
-                    if (match && match[1]) {
-                        const username = match[1];
-                        if (!['explore', 'accounts', 'direct', 'p', 'tv', 'reel', 'reels'].includes(username)) {
-                            usernames.push({ username, timestamp: null });
-                        }
-                    }
-                });
-                
-                const divs = doc.querySelectorAll('div');
-                divs.forEach(div => {
-                    const text = div.textContent.trim();
-                    if (/^@?[a-zA-Z0-9._]+$/.test(text) && text.length > 2 && text.length < 31) {
-                        const username = text.replace('@', '');
-                        if (!usernames.find(u => u.username === username)) {
-                            usernames.push({ username, timestamp: null });
-                        }
-                    }
-                });
-                
-                if (usernames.length > 0) {
-                    filterAndSetRequests(usernames);
-                    return;
-                }
-            }
-            
+
             if (jsonData) {
                 extractPendingRequests(jsonData);
                 return;
             }
-            
+
+            // ── Strategy 3: Anchor tags with instagram.com URLs ───────────────
+            const usernamesLinks = [];
+            const links = doc.querySelectorAll('a[href*="instagram.com/"]');
+            links.forEach(link => {
+                const href = link.getAttribute('href');
+                const match = href.match(/instagram\.com\/([^\/\?#]+)/);
+                if (match && match[1]) {
+                    const username = match[1];
+                    const reserved = ['explore', 'accounts', 'direct', 'p', 'tv', 'reel', 'reels', 'stories'];
+                    if (!reserved.includes(username) && /^[a-zA-Z0-9._]{1,30}$/.test(username)) {
+                        if (!usernamesLinks.find(u => u.username === username)) {
+                            usernamesLinks.push({ username, timestamp: null });
+                        }
+                    }
+                }
+            });
+
+            if (usernamesLinks.length > 0) {
+                log(`Parsed ${usernamesLinks.length} username(s) from anchor tags`, 'info');
+                filterAndSetRequests(usernamesLinks);
+                return;
+            }
+
             throw new Error('No usernames found in the HTML file');
-            
+
         } catch (error) {
             log('Error parsing HTML file: ' + error.message, 'error');
-            alert('Could not parse the HTML file. Please make sure you uploaded the correct pending_follow_requests.html file from your Instagram data.');
+            alert('Could not parse the HTML file. Please make sure you uploaded the correct pending_follow_requests.html file from your Instagram data export.');
         }
     }
     
